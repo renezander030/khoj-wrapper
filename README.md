@@ -24,6 +24,9 @@ cd khojWrapper
 # Install dependencies
 go mod tidy
 
+# Update the conversation ID (you can get the ID from khoj by starting a chat with any model of your choice)
+const continueConversationID = "your-conversation-id-here"
+
 # Build for Windows
 go build -o khoj-wrapper.exe khoj_provider.go
 
@@ -44,13 +47,11 @@ clients:
   - type: openai
     name: khoj
     api_base: http://localhost:3002/v1
-    api_key: your-khoj-api-key
+    api_key: dummy
     models:
       - name: khoj-chat
-        max_input_tokens: 100000
-        max_output_tokens: 4000
-        input_price: 0.0
-        output_price: 0.0
+        max_input_tokens: 40960
+        max_output_tokens: 2048
 ```
 
 Then use with:
@@ -75,6 +76,8 @@ Add to your Continue configuration:
   ]
 }
 ```
+
+Note: For now only chat will work.
 
 ## Windows Setup
 
@@ -128,6 +131,10 @@ The wrapper runs on port 3002 by default and provides these endpoints:
 - `/v1/chat/completions` - Chat completions (OpenAI compatible)
 - `/v1/completions` - Text completions (OpenAI compatible)
 - `/v1/models` - Available models
+
+## Support
+<a href="https://www.buymeacoffee.com/reneza"> <img align="left" src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210" alt="reneza" /></a>
+
 
 ## License
 
