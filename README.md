@@ -7,9 +7,7 @@
 - **💰 Cost-effective**: Access Claude Sonnet 4 for $20/month flat rate through Khoj
 - **🔌 OpenAI Compatible**: Works with any OpenAI API client (aichat, Continue.dev, etc.)
 - **🖥️ System Tray**: Clean Windows system tray integration with start/stop controls
-- **📁 File Support**: Handle file uploads and code diffs for development workflows
 - **🔄 Auto-start**: Configure for Windows startup to run automatically
-- **🌐 CORS Enabled**: Full web client compatibility
 - **📊 Health Monitoring**: Built-in health check endpoint
 
 ## For Developers
@@ -131,6 +129,9 @@ The wrapper runs on port 3002 by default and provides these endpoints:
 - `/v1/chat/completions` - Chat completions (OpenAI compatible)
 - `/v1/completions` - Text completions (OpenAI compatible)
 - `/v1/models` - Available models
+
+## Future Additions
+- **📁 File Support**: Handle file uploads and code diffs for development workflows
 
 ## Support
 <p><a href="https://www.buymeacoffee.com/reneza"> <img align="left" src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210" alt="reneza" /></a></p><br><br>
