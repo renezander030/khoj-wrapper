@@ -16,7 +16,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/khojWrapper.git
+git clone (this repository URL)
 cd khojWrapper
 
 # Install dependencies
