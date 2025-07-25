@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -362,6 +363,24 @@ func updateAgentSlug(newSlug string) error {
 	return nil
 }
 
+// openBrowser opens a URL in the default browser across different platforms
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	case "darwin": // macOS
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+
+	return cmd.Run()
+}
+
 // showInputDialog creates a temporary web server to show an input dialog
 func showInputDialog(title, prompt, defaultValue string) (string, error) {
 	// Find an available port
@@ -454,7 +473,9 @@ func showInputDialog(title, prompt, defaultValue string) (string, error) {
 	url := fmt.Sprintf("http://localhost:%d", port)
 	go func() {
 		time.Sleep(100 * time.Millisecond) // Give server time to start
-		exec.Command("cmd", "/c", "start", url).Run()
+		if err := openBrowser(url); err != nil {
+			log.Printf("Failed to open browser: %v", err)
+		}
 	}()
 
 	// Wait for result or timeout

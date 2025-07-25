@@ -1,14 +1,20 @@
 # Khoj Wrapper - Claude 4 for $20/month from your command line
 
-**Use Claude 4 for just $20 flat from your command line.** This application provides an OpenAI-compatible API wrapper for Khoj, allowing you to access Claude Sonnet 4 and other premium AI models through any OpenAI-compatible client at a fraction of the cost.
+**Use Claude 4 for just $20 flat from your command line.** This cross-platform application provides an OpenAI-compatible API wrapper for Khoj, allowing you to access Claude Sonnet 4 and other premium AI models through any OpenAI-compatible client at a fraction of the cost.
+
+**Supports Windows, macOS, and Linux** with identical functionality across all platforms.
 
 ## Key Features
 
 - **💰 Cost-effective**: Access Claude Sonnet 4 for $20/month flat rate through Khoj
 - **🔌 OpenAI Compatible**: Works with any OpenAI API client (aichat, Continue.dev, etc.)
-- **🖥️ System Tray**: Clean Windows system tray integration with start/stop controls
-- **🔄 Auto-start**: Configure for Windows startup to run automatically
+- **🏢 Corporate Friendly**: Works seamlessly in corporate environments with proxy support
+- **🖥️ Cross-Platform**: Native system tray integration on Windows, macOS, and Linux
+- **📁 File Support**: Handle file uploads and code diffs for development workflows
+- **🔄 Auto-start**: Configure for system startup across all platforms
+- **🌐 CORS Enabled**: Full web client compatibility
 - **📊 Health Monitoring**: Built-in health check endpoint
+- **🎛️ GUI Management**: Web-based conversation and agent management
 
 ## For Developers
 
@@ -16,20 +22,34 @@
 
 ```bash
 # Clone the repository
-git clone (this repository URL)
+git clone https://github.com/yourusername/khojWrapper.git
 cd khojWrapper
 
 # Install dependencies
 go mod tidy
 
-# Update the conversation ID (you can get the ID from khoj by starting a chat with any model of your choice)
-const continueConversationID = "your-conversation-id-here"
-
-# Build for Windows
-go build -o khoj-wrapper.exe khoj_provider.go
+# Build for your current platform
+go build -o khoj-wrapper khoj_provider.go
 
 # Run
-./khoj-wrapper.exe
+./khoj-wrapper
+```
+
+### Cross-Platform Building
+
+```bash
+# Build for Windows (from any platform)
+GOOS=windows GOARCH=amd64 go build -o khoj-wrapper.exe khoj_provider.go
+
+# Build for macOS (from any platform)
+GOOS=darwin GOARCH=amd64 go build -o khoj-wrapper-macos khoj_provider.go
+
+# Build for Linux (from any platform)
+GOOS=linux GOARCH=amd64 go build -o khoj-wrapper-linux khoj_provider.go
+
+# Build for ARM64 (Apple Silicon, Raspberry Pi, etc.)
+GOOS=darwin GOARCH=arm64 go build -o khoj-wrapper-macos-arm64 khoj_provider.go
+GOOS=linux GOARCH=arm64 go build -o khoj-wrapper-linux-arm64 khoj_provider.go
 ```
 
 ### Client Configuration
@@ -77,16 +97,27 @@ Add to your Continue configuration:
 
 Note: For now only chat will work.
 
-## Windows Setup
+## Platform Setup
 
-### Environment Variables
+### Environment Variables (All Platforms)
 
+#### Windows
 1. **Set Khoj API Key** (Required):
    - Press `Win + R`, type `sysdm.cpl`, press Enter
    - Click "Environment Variables"
    - Under "User variables", click "New"
    - Variable name: `KHOJ_API_KEY`
    - Variable value: Your Khoj API key from [app.khoj.dev](https://app.khoj.dev)
+
+#### macOS/Linux
+1. **Set Khoj API Key** (Required):
+   ```bash
+   # Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+   export KHOJ_API_KEY="your-khoj-api-key-here"
+
+   # Or set temporarily for current session
+   export KHOJ_API_KEY="your-khoj-api-key-here"
+   ```
 
 2. **Optional Environment Variables**:
    ```
@@ -95,8 +126,9 @@ Note: For now only chat will work.
    KHOJ_TIMEOUT=120s (default)
    ```
 
-### Windows Autostart
+### Autostart Configuration
 
+#### Windows
 1. **Using Startup Folder** (Recommended):
    - Press `Win + R`, type `shell:startup`, press Enter
    - Copy `khoj-wrapper.exe` to this folder
@@ -109,6 +141,77 @@ Note: For now only chat will work.
    - Action: "Start a program"
    - Program: Path to `khoj-wrapper.exe`
    - Check "Run with highest privileges"
+
+#### macOS
+1. **Using Login Items**:
+   - System Preferences → Users & Groups → Login Items
+   - Click "+" and add `khoj-wrapper-macos`
+   - The application will start automatically on login
+
+2. **Using LaunchAgent** (Advanced):
+   ```bash
+   # Create launch agent file
+   cat > ~/Library/LaunchAgents/com.khoj.wrapper.plist << EOF
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>Label</key>
+       <string>com.khoj.wrapper</string>
+       <key>ProgramArguments</key>
+       <array>
+           <string>/path/to/khoj-wrapper-macos</string>
+       </array>
+       <key>RunAtLoad</key>
+       <true/>
+   </dict>
+   </plist>
+   EOF
+
+   # Load the launch agent
+   launchctl load ~/Library/LaunchAgents/com.khoj.wrapper.plist
+   ```
+
+#### Linux
+1. **Using Autostart Desktop Entry**:
+   ```bash
+   # Create autostart directory if it doesn't exist
+   mkdir -p ~/.config/autostart
+
+   # Create desktop entry
+   cat > ~/.config/autostart/khoj-wrapper.desktop << EOF
+   [Desktop Entry]
+   Type=Application
+   Name=Khoj Wrapper
+   Exec=/path/to/khoj-wrapper-linux
+   Hidden=false
+   NoDisplay=false
+   X-GNOME-Autostart-enabled=true
+   EOF
+   ```
+
+2. **Using systemd user service** (Advanced):
+   ```bash
+   # Create service file
+   cat > ~/.config/systemd/user/khoj-wrapper.service << EOF
+   [Unit]
+   Description=Khoj Wrapper Service
+   After=graphical-session.target
+
+   [Service]
+   Type=simple
+   ExecStart=/path/to/khoj-wrapper-linux
+   Restart=always
+
+   [Install]
+   WantedBy=default.target
+   EOF
+
+   # Enable and start the service
+   systemctl --user daemon-reload
+   systemctl --user enable khoj-wrapper.service
+   systemctl --user start khoj-wrapper.service
+   ```
 
 ### Getting Your Khoj API Key
 
@@ -204,8 +307,34 @@ The wrapper runs on port 3002 by default and provides these endpoints:
 - **Session Creation**: Uses Khoj's `/api/chat/sessions` endpoint with `sonnet-short-025716` agent
 - **Flexible Conversation Control**: Switch between conversations or start fresh ones as needed
 
-## Future Additions
-- **📁 File Support**: Handle file uploads and code diffs for development workflows
+## Platform-Specific Notes
+
+### Windows
+- **System Tray**: Full native support
+- **Browser**: Uses default browser via `start` command
+- **Dependencies**: None (self-contained executable)
+
+### macOS
+- **System Tray**: Full native support (appears in menu bar)
+- **Browser**: Uses default browser via `open` command
+- **Dependencies**: None (self-contained executable)
+- **Permissions**: May require allowing the app in Security & Privacy settings
+
+### Linux
+- **System Tray**: Requires desktop environment with system tray support
+  - ✅ KDE, XFCE, MATE, Cinnamon (built-in support)
+  - ✅ GNOME (requires [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/))
+  - ✅ i3, sway (with status bars like i3status, waybar)
+- **Browser**: Uses default browser via `xdg-open` command
+- **Dependencies**: `xdg-open` (usually pre-installed)
+
+## Corporate Environment Notes
+
+- Works behind corporate firewalls and proxies
+- No special network configuration required
+- All traffic goes through standard HTTPS to Khoj servers
+- Can be deployed on internal networks for team use
+- Cross-platform deployment for mixed environments
 
 ## Support
 <p><a href="https://www.buymeacoffee.com/reneza"> <img align="left" src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210" alt="reneza" /></a></p><br><br>
