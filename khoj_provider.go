@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -90,6 +91,20 @@ type KhojResponse struct {
 	Detail         map[string]interface{}   `json:"detail,omitempty"`
 }
 
+type SessionRequest struct {
+	AgentSlug string `json:"agent_slug"`
+}
+
+type SessionResponse struct {
+	ConversationID string `json:"conversation_id"`
+}
+
+type ConversationState struct {
+	LastConversationID string    `json:"last_conversation_id"`
+	AgentSlug          string    `json:"agent_slug"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
 type MCPTool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
@@ -114,7 +129,236 @@ type MCPToolManager struct {
 	Sessions map[string]*MCPSession
 }
 
-const continueConversationID = "96b2b033-f967-4fbd-af86-dd92001538a7"
+// Global variables for conversation management
+var (
+	conversationID   string
+	currentAgentSlug string
+	newConversation  bool
+)
+
+// Command-line flags
+var (
+	flagNewConversation = flag.Bool("n", false, "Start a new conversation")
+	flagConversationID  = flag.String("conversation-id", "", "Override conversation ID")
+)
+
+const (
+	conversationStateFile = "conversation_state.json"
+	defaultAgentSlug      = "sonnet-short-025716"
+)
+
+// loadConversationState loads the conversation state from JSON file
+func loadConversationState() (*ConversationState, error) {
+	data, err := os.ReadFile(conversationStateFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &ConversationState{}, nil // Return empty state if file doesn't exist
+		}
+		return nil, fmt.Errorf("failed to read conversation state file: %w", err)
+	}
+
+	var state ConversationState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse conversation state: %w", err)
+	}
+
+	return &state, nil
+}
+
+// saveConversationState saves the conversation state to JSON file
+func saveConversationState(state *ConversationState) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal conversation state: %w", err)
+	}
+
+	if err := os.WriteFile(conversationStateFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write conversation state file: %w", err)
+	}
+
+	return nil
+}
+
+// createNewConversation creates a new conversation session via Khoj API
+func createNewConversation(apiBase, apiKey string) (string, error) {
+	agentSlug := currentAgentSlug
+	if agentSlug == "" {
+		agentSlug = defaultAgentSlug
+	}
+
+	sessionReq := SessionRequest{
+		AgentSlug: agentSlug,
+	}
+
+	jsonData, err := json.Marshal(sessionReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal session request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiBase+"/api/chat/sessions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create session request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "KhojProvider/1.0")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to create session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("session creation failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var sessionResp SessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sessionResp); err != nil {
+		return "", fmt.Errorf("failed to decode session response: %w", err)
+	}
+
+	return sessionResp.ConversationID, nil
+}
+
+// initializeConversationID sets up the conversation ID based on command-line flags and saved state
+func initializeConversationID() error {
+	// Parse command-line flags
+	flag.Parse()
+
+	// Check for conversation ID override from command line
+	if *flagConversationID != "" {
+		conversationID = *flagConversationID
+		log.Printf("Using conversation ID from command line: %s", conversationID)
+		return nil
+	}
+
+	// Check for new conversation flag
+	newConversation = *flagNewConversation
+	if newConversation {
+		log.Printf("Will create new conversation when server starts")
+		return nil
+	}
+
+	// Load conversation state from file
+	state, err := loadConversationState()
+	if err != nil {
+		return fmt.Errorf("failed to load conversation state: %w", err)
+	}
+
+	if state.LastConversationID == "" {
+		log.Printf("No saved conversation found, will create new conversation when server starts")
+		newConversation = true
+		// Set default agent slug if not set
+		if currentAgentSlug == "" {
+			currentAgentSlug = defaultAgentSlug
+		}
+		return nil
+	}
+
+	conversationID = state.LastConversationID
+	if state.AgentSlug != "" {
+		currentAgentSlug = state.AgentSlug
+	} else {
+		currentAgentSlug = defaultAgentSlug
+	}
+	log.Printf("Using saved conversation ID: %s (created: %s)", conversationID, state.CreatedAt.Format(time.RFC3339))
+	log.Printf("Using agent slug: %s", currentAgentSlug)
+	return nil
+}
+
+// createNewConversationFromMenu creates a new conversation and updates the menu
+func createNewConversationFromMenu() error {
+	apiBase := os.Getenv("KHOJ_API_BASE")
+	if apiBase == "" {
+		apiBase = "https://app.khoj.dev"
+	}
+
+	apiKey := os.Getenv("KHOJ_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("KHOJ_API_KEY not set")
+	}
+
+	newConvID, err := createNewConversation(apiBase, apiKey)
+	if err != nil {
+		return fmt.Errorf("failed to create new conversation: %w", err)
+	}
+
+	conversationID = newConvID
+
+	// Save the new conversation state
+	state := &ConversationState{
+		LastConversationID: conversationID,
+		AgentSlug:          currentAgentSlug,
+		CreatedAt:          time.Now(),
+	}
+	if err := saveConversationState(state); err != nil {
+		log.Printf("Warning: Failed to save conversation state: %v", err)
+	}
+
+	log.Printf("✅ New conversation created from menu: %s", conversationID)
+	return nil
+}
+
+// getConversationDisplayID returns the last 4 characters of the conversation ID for display
+func getConversationDisplayID() string {
+	if conversationID == "" {
+		return "None"
+	}
+	if len(conversationID) <= 4 {
+		return conversationID
+	}
+	return "..." + conversationID[len(conversationID)-4:]
+}
+
+// updateConversationID updates the current conversation ID and saves state
+func updateConversationID(newID string) error {
+	if newID == "" {
+		return fmt.Errorf("conversation ID cannot be empty")
+	}
+
+	conversationID = newID
+
+	// Save the updated conversation state
+	state := &ConversationState{
+		LastConversationID: conversationID,
+		AgentSlug:          currentAgentSlug,
+		CreatedAt:          time.Now(),
+	}
+	if err := saveConversationState(state); err != nil {
+		return fmt.Errorf("failed to save conversation state: %w", err)
+	}
+
+	log.Printf("✅ Conversation ID updated: %s", conversationID)
+	return nil
+}
+
+// updateAgentSlug updates the current agent slug and saves state
+func updateAgentSlug(newSlug string) error {
+	if newSlug == "" {
+		newSlug = defaultAgentSlug
+	}
+
+	currentAgentSlug = newSlug
+
+	// Save the updated conversation state
+	state := &ConversationState{
+		LastConversationID: conversationID,
+		AgentSlug:          currentAgentSlug,
+		CreatedAt:          time.Now(),
+	}
+	if err := saveConversationState(state); err != nil {
+		return fmt.Errorf("failed to save conversation state: %w", err)
+	}
+
+	log.Printf("✅ Agent slug updated: %s", currentAgentSlug)
+	return nil
+}
 
 type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
@@ -156,6 +400,17 @@ func onReady() {
 	mStop := systray.AddMenuItem("Stop Server", "Stop the server")
 	mStatus := systray.AddMenuItem("Status: Stopped", "Server status")
 	systray.AddSeparator()
+
+	// Conversation management
+	mConvID := systray.AddMenuItem("Conv: "+getConversationDisplayID(), "Current conversation ID")
+	mConvID.Disable() // Read-only status
+	mNewConv := systray.AddMenuItem("🆕 New Conversation", "Create a new conversation")
+	mEditConv := systray.AddMenuItem("✏️ Edit Conversation ID", "Change conversation ID")
+	mAgentSlug := systray.AddMenuItem("🤖 Agent: "+currentAgentSlug, "Current agent slug")
+	mAgentSlug.Disable() // Read-only status
+	mEditAgent := systray.AddMenuItem("⚙️ Edit Agent Slug", "Change agent slug")
+	systray.AddSeparator()
+
 	mAPIKey := systray.AddMenuItem(getAPIKeyStatus(), "API Key status")
 	mAPIKey.Disable() // Read-only status
 	systray.AddSeparator()
@@ -190,6 +445,25 @@ func onReady() {
 					mStatus.SetTitle("Status: Stopped")
 					systray.SetTooltip("Khoj Server: Stopped")
 				}
+
+			case <-mNewConv.ClickedCh:
+				if err := createNewConversationFromMenu(); err != nil {
+					log.Printf("Failed to create new conversation: %v", err)
+				} else {
+					mConvID.SetTitle("Conv: " + getConversationDisplayID())
+				}
+
+			case <-mEditConv.ClickedCh:
+				// For now, log that this feature needs implementation
+				// In a real implementation, you'd want to show a dialog
+				log.Printf("Edit conversation ID clicked - current: %s", conversationID)
+				log.Printf("To change conversation ID, use command line: -conversation-id <new-id>")
+
+			case <-mEditAgent.ClickedCh:
+				// For now, log that this feature needs implementation
+				// In a real implementation, you'd want to show a dialog
+				log.Printf("Edit agent slug clicked - current: %s", currentAgentSlug)
+				log.Printf("To change agent slug, modify the conversation_state.json file")
 
 			case <-mQuit.ClickedCh:
 				if globalServer.running {
@@ -238,6 +512,32 @@ func startServer() {
 
 	log.Printf("Using timeout: %v", timeout)
 	provider := NewKhojProviderWithTimeout(apiBase, apiKey, timeout)
+
+	// Handle conversation creation if needed
+	if newConversation || conversationID == "" {
+		log.Printf("Creating new conversation...")
+		newConvID, err := createNewConversation(apiBase, apiKey)
+		if err != nil {
+			log.Printf("Failed to create new conversation: %v", err)
+			globalServer.running = false
+			return
+		}
+
+		conversationID = newConvID
+		newConversation = false
+
+		// Save the new conversation ID to file
+		state := &ConversationState{
+			LastConversationID: conversationID,
+			AgentSlug:          currentAgentSlug,
+			CreatedAt:          time.Now(),
+		}
+		if err := saveConversationState(state); err != nil {
+			log.Printf("Warning: Failed to save conversation state: %v", err)
+		}
+
+		log.Printf("✅ New conversation created: %s", conversationID)
+	}
 
 	mux := http.NewServeMux()
 
@@ -844,7 +1144,7 @@ func (kp *KhojProvider) HandleChatCompletion(ctx context.Context, req *ChatCompl
 	khojReq := &KhojRequest{
 		Q:              finalPrompt,
 		Stream:         false,
-		ConversationID: continueConversationID,
+		ConversationID: conversationID, // Use global conversation ID (empty for new conversations)
 		ClientID:       "khoj-provider-continue",
 		Files:          files, // Send files here, not in prompt
 	}
@@ -874,6 +1174,7 @@ func (kp *KhojProvider) HandleChatCompletion(ctx context.Context, req *ChatCompl
 	log.Printf("=== DEBUG: Khoj API Response ===")
 	log.Printf("Response length: %d characters", len(khojResp.Response))
 	log.Printf("Response preview: %s", khojResp.Response[:min(300, len(khojResp.Response))])
+	log.Printf("Using conversation ID: %s", conversationID)
 
 	response := &ChatCompletionResponse{
 		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().Unix()),
@@ -1171,6 +1472,11 @@ func min(a, b int) int {
 }
 
 func main() {
+	// Initialize conversation ID from environment variables and command-line flags
+	if err := initializeConversationID(); err != nil {
+		log.Fatal("Conversation ID initialization failed: ", err)
+	}
+
 	// Initialize systray
 	systray.Run(onReady, onExit)
 }

@@ -120,15 +120,79 @@ Note: For now only chat will work.
 
 ## Usage
 
-1. **Start the wrapper**: Run `khoj-wrapper.exe` or use the system tray
-2. **Verify it's running**: Visit `http://localhost:3002/health`
-3. **Use with any OpenAI client**: Point your client to `http://localhost:3002/v1`
+### First Time Setup
+
+1. **Start the wrapper**: Run `khoj-wrapper.exe`
+2. **Automatic conversation creation**: The app will automatically create a new conversation on first run
+3. **Conversation persistence**: Your conversation ID is saved to `conversation_state.json`
+4. **Verify it's running**: Visit `http://localhost:3002/health`
+5. **Use with any OpenAI client**: Point your client to `http://localhost:3002/v1`
+
+### Command Line Options
+
+```bash
+khoj-wrapper.exe [options]
+
+Options:
+  -n                    Start a new conversation (creates fresh conversation session)
+  -conversation-id ID   Use specific conversation ID (overrides saved state)
+```
+
+### System Tray Features
+
+The application provides a rich system tray interface for conversation management:
+
+- **🆕 New Conversation**: Click to create a new conversation session instantly
+- **Conv: ...xxxx**: Shows the last 4 characters of your current conversation ID
+- **✏️ Edit Conversation ID**: Change the active conversation (currently via command line)
+- **🤖 Agent**: Shows the current agent slug being used
+- **⚙️ Edit Agent Slug**: Change the AI agent (modify `conversation_state.json` or see below)
+
+### Conversation Management
+
+- **Automatic Creation**: If no saved conversation exists, a new one is created automatically
+- **Persistent State**: Conversation IDs are saved in `conversation_state.json` in the app directory
+- **New Conversations**: Use `-n` flag or system tray menu to start fresh conversations anytime
+- **Manual Override**: Use `-conversation-id` to switch to specific conversation contexts
+
+### Finding Agent Slugs
+
+To use different AI agents (models), you need to find their agent slugs from the Khoj web interface:
+
+1. **Open Khoj Web App**: Go to [app.khoj.dev](https://app.khoj.dev) in your browser
+2. **Open Developer Tools**: Press `F12` or right-click → "Inspect Element"
+3. **Go to Network Tab**: Click the "Network" tab in developer tools
+4. **Start New Conversation**: Click "New Conversation" in the web interface
+5. **Select Your Agent**: Choose the AI model/agent you want to use
+6. **Find the Request**: Look for a POST request to `/api/chat/sessions` in the network tab
+7. **Check Payload**: Click on the request and look at the "Payload" or "Request" section
+8. **Copy Agent Slug**: Find the `agent_slug` value (e.g., `"sonnet-short-025716"`, `"gpt-4o-mini"`, etc.)
+
+#### Common Agent Slugs
+- `sonnet-short-025716` - Claude Sonnet (default)
+- `gpt-4o-mini` - GPT-4o Mini
+- `gpt-4o` - GPT-4o
+- `o1-preview` - OpenAI o1 Preview
+- `gemini-pro` - Google Gemini Pro
+
+#### Using Custom Agent Slugs
+
+1. **Edit JSON File**: Modify `conversation_state.json` and change the `agent_slug` field
+2. **Restart Application**: The new agent will be used for new conversations
+3. **System Tray**: The current agent is displayed in the system tray menu
 
 The wrapper runs on port 3002 by default and provides these endpoints:
 - `/health` - Health check
 - `/v1/chat/completions` - Chat completions (OpenAI compatible)
 - `/v1/completions` - Text completions (OpenAI compatible)
 - `/v1/models` - Available models
+
+### Advanced Features
+
+- **Automatic Conversation Management**: Creates and manages Khoj conversation sessions automatically
+- **Persistent State**: Conversation context is maintained across app restarts via JSON file
+- **Session Creation**: Uses Khoj's `/api/chat/sessions` endpoint with `sonnet-short-025716` agent
+- **Flexible Conversation Control**: Switch between conversations or start fresh ones as needed
 
 ## Future Additions
 - **📁 File Support**: Handle file uploads and code diffs for development workflows
