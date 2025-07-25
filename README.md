@@ -144,9 +144,9 @@ The application provides a rich system tray interface for conversation managemen
 
 - **🆕 New Conversation**: Click to create a new conversation session instantly
 - **Conv: ...xxxx**: Shows the last 4 characters of your current conversation ID
-- **✏️ Edit Conversation ID**: Change the active conversation (currently via command line)
+- **✏️ Edit Conversation ID**: Opens a web form to change the active conversation ID
 - **🤖 Agent**: Shows the current agent slug being used
-- **⚙️ Edit Agent Slug**: Change the AI agent (modify `conversation_state.json` or see below)
+- **⚙️ Edit Agent Slug**: Opens a web form to change the AI agent slug
 
 ### Conversation Management
 
@@ -177,9 +177,19 @@ To use different AI agents (models), you need to find their agent slugs from the
 
 #### Using Custom Agent Slugs
 
-1. **Edit JSON File**: Modify `conversation_state.json` and change the `agent_slug` field
-2. **Restart Application**: The new agent will be used for new conversations
-3. **System Tray**: The current agent is displayed in the system tray menu
+1. **System Tray Menu**: Click "⚙️ Edit Agent Slug" for a user-friendly web form
+2. **Edit JSON File**: Alternatively, modify `conversation_state.json` and change the `agent_slug` field
+3. **Restart Application**: Changes take effect immediately (no restart needed for menu changes)
+4. **System Tray**: The current agent is displayed in the system tray menu
+
+#### Web-Based Editing
+
+The edit functions open a clean web form in your default browser:
+- **User-friendly interface** with proper styling and validation
+- **Auto-focus and text selection** for quick editing
+- **Automatic saving** when you submit the form
+- **Real-time menu updates** to reflect changes
+- **5-minute timeout** for security (form closes automatically)
 
 The wrapper runs on port 3002 by default and provides these endpoints:
 - `/health` - Health check

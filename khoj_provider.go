@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -360,6 +362,161 @@ func updateAgentSlug(newSlug string) error {
 	return nil
 }
 
+// showInputDialog creates a temporary web server to show an input dialog
+func showInputDialog(title, prompt, defaultValue string) (string, error) {
+	// Find an available port
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return "", fmt.Errorf("failed to find available port: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	// Channel to receive the result
+	resultCh := make(chan string, 1)
+	errorCh := make(chan error, 1)
+
+	// Create HTTP server
+	mux := http.NewServeMux()
+
+	// Serve the input form
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		html := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>%s</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 50px; background: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto; }
+        h2 { color: #333; margin-bottom: 20px; }
+        input[type="text"] { width: 100%%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; margin: 10px 0; }
+        button { background: #007cba; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-right: 10px; }
+        button:hover { background: #005a87; }
+        .cancel { background: #666; }
+        .cancel:hover { background: #444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>%s</h2>
+        <form method="POST" action="/submit">
+            <p>%s</p>
+            <input type="text" name="value" value="%s" required autofocus>
+            <br><br>
+            <button type="submit">OK</button>
+            <button type="button" class="cancel" onclick="window.close()">Cancel</button>
+        </form>
+    </div>
+    <script>
+        // Auto-select the input text
+        document.querySelector('input[name="value"]').select();
+        // Handle form submission
+        document.querySelector('form').onsubmit = function(e) {
+            e.preventDefault();
+            fetch('/submit', {
+                method: 'POST',
+                body: new FormData(this)
+            }).then(() => {
+                window.close();
+            });
+        };
+    </script>
+</body>
+</html>`, title, title, prompt, defaultValue)
+
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(html))
+	})
+
+	// Handle form submission
+	mux.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			value := r.FormValue("value")
+			resultCh <- value
+			w.Write([]byte("OK - You can close this window"))
+		}
+	})
+
+	server := &http.Server{
+		Addr:    ":" + strconv.Itoa(port),
+		Handler: mux,
+	}
+
+	// Start server in background
+	go func() {
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			errorCh <- err
+		}
+	}()
+
+	// Open browser
+	url := fmt.Sprintf("http://localhost:%d", port)
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Give server time to start
+		exec.Command("cmd", "/c", "start", url).Run()
+	}()
+
+	// Wait for result or timeout
+	select {
+	case result := <-resultCh:
+		server.Close()
+		return result, nil
+	case err := <-errorCh:
+		server.Close()
+		return "", err
+	case <-time.After(5 * time.Minute): // 5 minute timeout
+		server.Close()
+		return "", fmt.Errorf("input dialog timed out")
+	}
+}
+
+// editConversationIDDialog shows a dialog to edit the conversation ID
+func editConversationIDDialog() error {
+	currentID := conversationID
+	if currentID == "" {
+		currentID = "No conversation ID set"
+	}
+
+	newID, err := showInputDialog(
+		"Edit Conversation ID",
+		"Enter the new conversation ID:",
+		currentID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to show input dialog: %w", err)
+	}
+
+	if newID == "" || newID == currentID {
+		return nil // User cancelled or no change
+	}
+
+	return updateConversationID(newID)
+}
+
+// editAgentSlugDialog shows a dialog to edit the agent slug
+func editAgentSlugDialog() error {
+	currentSlug := currentAgentSlug
+	if currentSlug == "" {
+		currentSlug = defaultAgentSlug
+	}
+
+	newSlug, err := showInputDialog(
+		"Edit Agent Slug",
+		"Enter the new agent slug (e.g., sonnet-short-025716, gpt-4o-mini):",
+		currentSlug,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to show input dialog: %w", err)
+	}
+
+	if newSlug == "" || newSlug == currentSlug {
+		return nil // User cancelled or no change
+	}
+
+	return updateAgentSlug(newSlug)
+}
+
 type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -454,16 +611,18 @@ func onReady() {
 				}
 
 			case <-mEditConv.ClickedCh:
-				// For now, log that this feature needs implementation
-				// In a real implementation, you'd want to show a dialog
-				log.Printf("Edit conversation ID clicked - current: %s", conversationID)
-				log.Printf("To change conversation ID, use command line: -conversation-id <new-id>")
+				if err := editConversationIDDialog(); err != nil {
+					log.Printf("Failed to edit conversation ID: %v", err)
+				} else {
+					mConvID.SetTitle("Conv: " + getConversationDisplayID())
+				}
 
 			case <-mEditAgent.ClickedCh:
-				// For now, log that this feature needs implementation
-				// In a real implementation, you'd want to show a dialog
-				log.Printf("Edit agent slug clicked - current: %s", currentAgentSlug)
-				log.Printf("To change agent slug, modify the conversation_state.json file")
+				if err := editAgentSlugDialog(); err != nil {
+					log.Printf("Failed to edit agent slug: %v", err)
+				} else {
+					mAgentSlug.SetTitle("🤖 Agent: " + currentAgentSlug)
+				}
 
 			case <-mQuit.ClickedCh:
 				if globalServer.running {
