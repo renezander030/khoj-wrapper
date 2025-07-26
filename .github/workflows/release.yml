@@ -1,0 +1,174 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on semantic version tags like v1.0.0, v1.2.3
+  release:
+    types: [created]  # Triggers when a release is manually created
+
+permissions:
+  contents: write  # Required for creating releases and uploading assets
+
+jobs:
+  build:
+    name: Build Cross-Platform Binaries
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            binary_name: khoj-wrapper-windows-amd64.exe
+            runner: ubuntu-latest
+          - goos: darwin
+            goarch: amd64
+            binary_name: khoj-wrapper-macos-amd64
+            runner: macos-latest
+          - goos: darwin
+            goarch: arm64
+            binary_name: khoj-wrapper-macos-arm64
+            runner: macos-latest
+          - goos: linux
+            goarch: amd64
+            binary_name: khoj-wrapper-linux-amd64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'  # Use Go 1.21 or later for best compatibility
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install dependencies
+      run: go mod tidy
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: ${{ matrix.goos == 'darwin' && '1' || '0' }}  # Enable CGO for macOS, disable for others
+      run: |
+        echo "Building for ${{ matrix.goos }}/${{ matrix.goarch }} with CGO_ENABLED=$CGO_ENABLED"
+        go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.binary_name }} khoj_provider.go
+
+    - name: Generate checksum
+      run: |
+        if [[ "${{ matrix.runner }}" == "macos-latest" ]]; then
+          shasum -a 256 ${{ matrix.binary_name }} > ${{ matrix.binary_name }}.sha256
+        else
+          sha256sum ${{ matrix.binary_name }} > ${{ matrix.binary_name }}.sha256
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.binary_name }}
+        path: |
+          ${{ matrix.binary_name }}
+          ${{ matrix.binary_name }}.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: ./artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p ./release-assets
+        find ./artifacts -type f \( -name "khoj-wrapper-*" -o -name "*.sha256" \) -exec cp {} ./release-assets/ \;
+        ls -la ./release-assets/
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        cat > release_notes.md << 'EOF'
+        ## Khoj Wrapper ${{ github.ref_name }}
+        
+        ### 🚀 Cross-Platform Binaries
+        
+        Download the appropriate binary for your platform:
+        
+        - **Windows (64-bit)**: `khoj-wrapper-windows-amd64.exe`
+        - **macOS (Intel)**: `khoj-wrapper-macos-amd64`
+        - **macOS (Apple Silicon)**: `khoj-wrapper-macos-arm64`
+        - **Linux (64-bit)**: `khoj-wrapper-linux-amd64`
+        
+        ### 🔐 Security
+        
+        Each binary includes a SHA256 checksum file for verification:
+        ```bash
+        # Verify checksum (example for Linux)
+        sha256sum -c khoj-wrapper-linux-amd64.sha256
+        ```
+        
+        ### 📋 Installation
+        
+        1. Download the binary for your platform
+        2. Make it executable (macOS/Linux): `chmod +x khoj-wrapper-*`
+        3. Set your `KHOJ_API_KEY` environment variable
+        4. Run the binary: `./khoj-wrapper-*`
+        
+        ### 🆕 What's New
+        
+        - Cross-platform support (Windows, macOS, Linux)
+        - System tray integration with conversation management
+        - Web-based input dialogs for editing conversation ID and agent slug
+        - Automatic conversation creation and persistence
+        - OpenAI-compatible API endpoints
+        
+        ### 🔧 Requirements
+        
+        - **Khoj API Key**: Get yours at [app.khoj.dev](https://app.khoj.dev)
+        - **System Tray Support**: 
+          - Windows: Built-in
+          - macOS: Built-in
+          - Linux: Desktop environment with system tray (GNOME requires AppIndicator extension)
+        
+        For detailed setup instructions, see the [README](https://github.com/${{ github.repository }}/blob/main/README.md).
+        EOF
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ./release-assets/*
+        body_path: release_notes.md
+        draft: false
+        prerelease: ${{ contains(github.ref_name, '-') }}  # Mark as prerelease if version contains hyphen (e.g., v1.0.0-beta)
+        generate_release_notes: true  # Auto-generate additional release notes from commits
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    name: Post-Release Notifications
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+    - name: Release Summary
+      run: |
+        echo "✅ Successfully built and released Khoj Wrapper ${{ github.ref_name }}"
+        echo "📦 Binaries available at: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+        echo "🎯 Platforms: Windows (amd64), macOS (amd64, arm64), Linux (amd64)"

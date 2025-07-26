@@ -1,2 +1,5 @@
 *.exe
 go.sum
+scripts
+build
+internal.md

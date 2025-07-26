@@ -16,6 +16,34 @@
 - **📊 Health Monitoring**: Built-in health check endpoint
 - **🎛️ GUI Management**: Web-based conversation and agent management
 
+## Installation
+
+### Pre-Built Binaries (Recommended)
+
+Download the latest release for your platform from the [Releases page](https://github.com/yourusername/khojWrapper/releases):
+
+- **Windows (64-bit)**: `khoj-wrapper-windows-amd64.exe`
+- **macOS (Intel)**: `khoj-wrapper-macos-amd64`
+- **macOS (Apple Silicon)**: `khoj-wrapper-macos-arm64`
+- **Linux (64-bit)**: `khoj-wrapper-linux-amd64`
+
+#### Quick Installation
+```bash
+# Example for Linux (replace with your platform)
+wget https://github.com/yourusername/khojWrapper/releases/latest/download/khoj-wrapper-linux-amd64
+chmod +x khoj-wrapper-linux-amd64
+./khoj-wrapper-linux-amd64
+```
+
+#### Verify Download (Optional)
+```bash
+# Download checksum file
+wget https://github.com/yourusername/khojWrapper/releases/latest/download/khoj-wrapper-linux-amd64.sha256
+
+# Verify integrity
+sha256sum -c khoj-wrapper-linux-amd64.sha256
+```
+
 ## For Developers
 
 ### Building from Source
@@ -51,7 +79,6 @@ GOOS=linux GOARCH=amd64 go build -o khoj-wrapper-linux khoj_provider.go
 GOOS=darwin GOARCH=arm64 go build -o khoj-wrapper-macos-arm64 khoj_provider.go
 GOOS=linux GOARCH=arm64 go build -o khoj-wrapper-linux-arm64 khoj_provider.go
 ```
-
 ### Client Configuration
 
 This wrapper is compatible with [aichat](https://github.com/sigoden/aichat) and other OpenAI-compatible clients.
@@ -335,6 +362,52 @@ The wrapper runs on port 3002 by default and provides these endpoints:
 - All traffic goes through standard HTTPS to Khoj servers
 - Can be deployed on internal networks for team use
 - Cross-platform deployment for mixed environments
+
+## Contributing
+
+### Development Setup
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/yourusername/khojWrapper.git
+   cd khojWrapper
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   go mod tidy
+   ```
+
+### Troubleshooting Builds
+
+**Common Issues:**
+
+1. **macOS Build Failures**:
+   ```
+   Error: cgo: C compiler "clang" not found
+   ```
+   - **Cause**: Cross-compiling macOS requires clang and CGO
+   - **Quick Fix**: Use `build-simple.*` scripts (skips macOS on non-macOS)
+   - **Complete Fix**: Install clang or build on macOS system
+   - **CI/CD**: GitHub Actions uses macOS runners automatically
+
+2. **Missing Dependencies**:
+   ```
+   Error: go: module not found
+   ```
+   - **Solution**: Run `go mod tidy` before building
+
+3. **Permission Errors** (Linux/macOS):
+   ```
+   Error: permission denied
+   ```
+   - **Solution**: `chmod +x scripts/build-all.sh`
+
+4. **CGO Errors on Cross-compilation**:
+   - **Solution**: Use platform-specific runners in CI/CD
+   - **Local**: Build on target platform for best results
+
+### Quick Reference
 
 ## Support
 <p><a href="https://www.buymeacoffee.com/reneza"> <img align="left" src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210" alt="reneza" /></a></p><br><br>
