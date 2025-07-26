@@ -65,7 +65,17 @@ jobs:
       run: |
         echo "Building for ${{ matrix.goos }}/${{ matrix.goarch }} with CGO_ENABLED=$CGO_ENABLED"
         echo "Go version: $(go version)"
-        go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.binary_name }} khoj_provider.go
+
+        # Set platform-specific ldflags
+        if [[ "${{ matrix.goos }}" == "windows" ]]; then
+          LDFLAGS="-s -w -H windowsgui -X main.version=${{ github.ref_name }}"
+          echo "Using Windows-specific ldflags (no console window)"
+        else
+          LDFLAGS="-s -w -X main.version=${{ github.ref_name }}"
+          echo "Using standard ldflags"
+        fi
+
+        go build -ldflags="$LDFLAGS" -o ${{ matrix.binary_name }} khoj_provider.go
 
         # Verify the binary was created
         if [ ! -f "${{ matrix.binary_name }}" ]; then

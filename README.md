@@ -10,6 +10,7 @@
 - **🔌 OpenAI Compatible**: Works with any OpenAI API client (aichat, Continue.dev, etc.)
 - **🏢 Corporate Friendly**: Works seamlessly in corporate environments with proxy support
 - **🖥️ Cross-Platform**: Native system tray integration on Windows, macOS, and Linux
+- **🔇 Silent Operation**: Windows version runs without console window (background operation)
 - **📁 File Support**: Handle file uploads and code diffs for development workflows
 - **🔄 Auto-start**: Configure for system startup across all platforms
 - **🌐 CORS Enabled**: Full web client compatibility
@@ -340,6 +341,7 @@ The wrapper runs on port 3002 by default and provides these endpoints:
 - **System Tray**: Full native support
 - **Browser**: Uses default browser via `start` command
 - **Dependencies**: None (self-contained executable)
+- **Console Window**: Hidden by default (runs silently in background)
 
 ### macOS
 - **System Tray**: Full native support (appears in menu bar)
