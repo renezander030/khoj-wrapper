@@ -72,10 +72,9 @@ type KhojRequest struct {
 	ConversationID string     `json:"conversation_id,omitempty"`
 	Stream         bool       `json:"stream"`
 	ClientID       string     `json:"client_id,omitempty"`
-	Files          []KhojFile `json:"files,omitempty"` // Add this line
+	Files          []KhojFile `json:"files,omitempty"`
 }
 
-// Add this new struct
 type KhojFile struct {
 	Name     string `json:"name"`
 	Content  string `json:"content"`
@@ -924,7 +923,6 @@ func findChangedSections(originalLines, modifiedLines []string) []ChangeSection 
 				linesProcessed++
 			}
 
-			// Add this change (limit to first 3 lines for minimal diff)
 			changes = append(changes, ChangeSection{
 				OrigStart: changeStart,
 				OrigEnd:   min(changeStart+3, origEnd),
