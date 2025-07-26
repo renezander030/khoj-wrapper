@@ -4,3 +4,5 @@ go.sum
 scripts
 build
 internal.md
+proxy.png
+conversation_state.json
