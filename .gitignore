@@ -1,4 +1,5 @@
 *.exe
+*.exe~
 go.sum
 scripts
 build
