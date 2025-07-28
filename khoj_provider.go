@@ -841,23 +841,195 @@ func sendTextCharByChar(text string) error {
 	return nil
 }
 
-func showWindowsInputDialog(title, prompt, defaultValue string) (string, error) {
+// bringToForeground aggressively brings windows to foreground
+func bringToForeground() {
 	if runtime.GOOS != "windows" {
-		return "", fmt.Errorf("Windows input dialog only available on Windows")
+		return
 	}
 
-	// For now, use a simple message box approach
-	// In a full implementation, you'd create a proper dialog window
-	titlePtr, _ := syscall.UTF16PtrFromString(title + "\n\n" + prompt + "\n\nDefault: " + defaultValue + "\n\nPress OK to use default, Cancel to skip.")
-	captionPtr, _ := syscall.UTF16PtrFromString("Khoj AI - Add Context")
+	// Get Windows API functions
+	getCurrentThreadId := kernel32.NewProc("GetCurrentThreadId")
+	getForegroundWindow := user32.NewProc("GetForegroundWindow")
+	getWindowThreadProcessId := user32.NewProc("GetWindowThreadProcessId")
+	attachThreadInput := user32.NewProc("AttachThreadInput")
+	allowSetForegroundWindow := user32.NewProc("AllowSetForegroundWindow")
 
-	// MB_OKCANCEL = 1, MB_ICONQUESTION = 32
-	ret, _, _ := procMessageBox.Call(0, uintptr(unsafe.Pointer(titlePtr)), uintptr(unsafe.Pointer(captionPtr)), 1|32)
+	// Get current thread ID
+	currentThreadId, _, _ := getCurrentThreadId.Call()
 
-	if ret == 1 { // OK pressed
-		return defaultValue, nil
+	// Get foreground window and its thread
+	foregroundWindow, _, _ := getForegroundWindow.Call()
+	if foregroundWindow != 0 {
+		foregroundThreadId, _, _ := getWindowThreadProcessId.Call(foregroundWindow, 0)
+
+		if foregroundThreadId != currentThreadId {
+			// Attach to foreground thread to bypass focus stealing prevention
+			attachThreadInput.Call(currentThreadId, foregroundThreadId, 1)
+
+			// Allow our process to set foreground window
+			allowSetForegroundWindow.Call(uintptr(0xFFFFFFFF)) // ASFW_ANY
+
+			// Small delay
+			time.Sleep(10 * time.Millisecond)
+
+			// Detach from foreground thread
+			attachThreadInput.Call(currentThreadId, foregroundThreadId, 0)
+		}
 	}
-	return "", nil // Cancel pressed or closed
+
+	// Also allow our process specifically
+	allowSetForegroundWindow.Call(uintptr(0xFFFFFFFF))
+
+	log.Printf("🔄 Aggressively prepared foreground permissions")
+}
+
+// forceWindowToForeground uses multiple techniques to force window to front
+func forceWindowToForeground() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	// Find our MessageBox window and force it to foreground
+	findWindow := user32.NewProc("FindWindowW")
+	setForegroundWindow := user32.NewProc("SetForegroundWindow")
+	showWindow := user32.NewProc("ShowWindow")
+	bringWindowToTop := user32.NewProc("BringWindowToTop")
+	setWindowPos := user32.NewProc("SetWindowPos")
+
+	// Try to find MessageBox window (class name "#32770")
+	className, _ := syscall.UTF16PtrFromString("#32770")
+	hwnd, _, _ := findWindow.Call(uintptr(unsafe.Pointer(className)), 0)
+
+	if hwnd != 0 {
+		// Multiple attempts to bring window to front
+		showWindow.Call(hwnd, 9) // SW_RESTORE
+		showWindow.Call(hwnd, 5) // SW_SHOW
+		bringWindowToTop.Call(hwnd)
+		setForegroundWindow.Call(hwnd)
+
+		// Set window as topmost temporarily
+		setWindowPos.Call(hwnd, uintptr(0xFFFFFFFF), 0, 0, 0, 0, 0x0001|0x0002|0x0040) // HWND_TOPMOST, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW
+
+		log.Printf("🔄 Forced MessageBox window to foreground")
+	}
+}
+
+// showModernInputDialog shows a simple but reliable input dialog
+func showModernInputDialog(title, prompt, defaultValue string) (string, bool) {
+	if runtime.GOOS != "windows" {
+		return defaultValue, false
+	}
+
+	log.Printf("🔔 Showing input dialog for user prompt")
+
+	// Force current process to foreground
+	bringToForeground()
+
+	// Get desktop window as parent
+	getDesktopWindow := user32.NewProc("GetDesktopWindow")
+	desktopWindow, _, _ := getDesktopWindow.Call()
+
+	// First, show a choice dialog
+	titlePtr, _ := syscall.UTF16PtrFromString(title)
+	promptPtr, _ := syscall.UTF16PtrFromString(fmt.Sprintf("%s\n\nDefault: \"%s\"\n\nYES = Use default prompt\nNO = Enter custom prompt\nCANCEL = Abort", prompt, defaultValue))
+
+	// Start a goroutine to force the dialog to foreground after a short delay
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Wait for dialog to appear
+		forceWindowToForeground()
+	}()
+
+	// MB_YESNOCANCEL = 3, MB_ICONQUESTION = 32, MB_TOPMOST = 0x40000, MB_SETFOREGROUND = 0x10000, MB_SYSTEMMODAL = 0x1000
+	ret, _, _ := procMessageBox.Call(desktopWindow, uintptr(unsafe.Pointer(promptPtr)), uintptr(unsafe.Pointer(titlePtr)), 3|32|0x40000|0x10000|0x1000)
+
+	switch ret {
+	case 6: // YES - use default
+		log.Printf("✅ User chose default prompt: %s", defaultValue)
+		return defaultValue, false
+	case 7: // NO - get custom input
+		log.Printf("🔄 User wants to enter custom prompt")
+		return showSimpleTextInput(title, "Enter your custom prompt:", defaultValue)
+	default: // CANCEL or close
+		log.Printf("ℹ️ User cancelled the dialog")
+		return "", true
+	}
+}
+
+// showSimpleTextInput shows a working text input dialog
+func showSimpleTextInput(title, prompt, defaultValue string) (string, bool) {
+	if runtime.GOOS != "windows" {
+		return defaultValue, false
+	}
+
+	// Force to foreground before showing input dialog
+	bringToForeground()
+
+	// Create a VBScript that forces the dialog to foreground
+	script := fmt.Sprintf(`
+Set objShell = CreateObject("WScript.Shell")
+
+' Bring the script window to foreground first
+objShell.AppActivate "Windows Script Host"
+
+' Show InputBox and force it to foreground
+strInput = InputBox("%s", "%s", "%s")
+
+' Force the dialog to stay on top
+objShell.AppActivate "%s"
+
+If strInput <> "" Then
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    Set objFile = objFSO.CreateTextFile("temp_input_result.txt", True)
+    objFile.WriteLine "OK:" & strInput
+    objFile.Close
+Else
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    Set objFile = objFSO.CreateTextFile("temp_input_result.txt", True)
+    objFile.WriteLine "CANCEL:"
+    objFile.Close
+End If
+`, prompt, title, defaultValue, title)
+
+	// Write VBScript to file
+	scriptFile := "temp_input_dialog.vbs"
+	err := os.WriteFile(scriptFile, []byte(script), 0644)
+	if err != nil {
+		log.Printf("⚠️ Failed to write VBScript: %v", err)
+		return defaultValue, false
+	}
+
+	// Execute VBScript with wscript (shows GUI)
+	cmd := exec.Command("wscript", scriptFile)
+	err = cmd.Run()
+	if err != nil {
+		log.Printf("⚠️ Failed to run VBScript: %v", err)
+		os.Remove(scriptFile)
+		return defaultValue, false
+	}
+
+	// Read result from file
+	resultFile := "temp_input_result.txt"
+	output, err := os.ReadFile(resultFile)
+	if err != nil {
+		log.Printf("⚠️ Failed to read input result: %v", err)
+		os.Remove(scriptFile)
+		return defaultValue, false
+	}
+
+	// Clean up
+	os.Remove(scriptFile)
+	os.Remove(resultFile)
+
+	// Parse result
+	result := strings.TrimSpace(string(output))
+	if strings.HasPrefix(result, "OK:") {
+		userInput := strings.TrimPrefix(result, "OK:")
+		log.Printf("✅ User entered custom prompt: %s", userInput)
+		return userInput, false
+	} else {
+		log.Printf("ℹ️ User cancelled custom input")
+		return "", true
+	}
 }
 
 func showNotification(title, message string) {
@@ -1040,11 +1212,23 @@ func processClipboardWithAI() {
 
 	log.Printf("📋 Clipboard content: %d characters", len(clipboardText))
 
-	// Show single notification at the start
+	// Show dialog to get user prompt
+	userPrompt, cancelled := showModernInputDialog("Khoj AI - Add Context", "Add instructions or context for the AI:", "Explain this in two sentences")
+	if cancelled {
+		log.Printf("ℹ️ User cancelled the prompt dialog")
+		return
+	}
+
+	// Show single notification after user confirms
 	showNotification("Khoj AI", "Processing clipboard content...")
 
-	// Prepare the prompt directly without dialog for instant processing
-	finalPrompt := fmt.Sprintf("Please explain or help with this content:\n\n%s", clipboardText)
+	// Prepare the final prompt with user input
+	var finalPrompt string
+	if userPrompt != "" && userPrompt != "Explain this in two sentences" {
+		finalPrompt = fmt.Sprintf("%s\n\nContent:\n%s", userPrompt, clipboardText)
+	} else {
+		finalPrompt = fmt.Sprintf("Explain this in two sentences:\n\n%s", clipboardText)
+	}
 
 	// Create context with timeout - don't defer cancel here since we need it in the goroutine
 	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
