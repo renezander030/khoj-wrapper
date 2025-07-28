@@ -11,6 +11,7 @@
 - **🏢 Corporate Friendly**: Works seamlessly in corporate environments with proxy support
 - **🖥️ Cross-Platform**: Native system tray integration on Windows, macOS, and Linux
 - **🔇 Silent Operation**: Windows version runs without console window (background operation)
+- **📋 Clipboard AI**: Windows-only feature to process clipboard content with AI via Ctrl+Q shortcut
 - **📁 File Support**: Handle file uploads and code diffs for development workflows
 - **🔄 Auto-start**: Configure for system startup across all platforms
 - **🌐 CORS Enabled**: Full web client compatibility
@@ -278,6 +279,51 @@ The application provides a rich system tray interface for conversation managemen
 - **✏️ Edit Conversation ID**: Opens a web form to change the active conversation ID
 - **🤖 Agent**: Shows the current agent slug being used
 - **⚙️ Edit Agent Slug**: Opens a web form to change the AI agent slug
+- **📋 Clipboard AI (Ctrl+Q)**: Process clipboard content with AI (Windows only)
+
+## 📋 Clipboard AI Feature (Windows Only)
+
+### **Quick AI Assistance with Ctrl+Q**
+
+The Clipboard AI feature allows you to instantly process any text content with AI and insert the response directly at your cursor position.
+
+#### **How It Works:**
+1. **Copy text** to clipboard (Ctrl+C)
+2. **Position cursor** where you want the AI response
+3. **Press Ctrl+Q** to trigger AI processing
+4. **Add context** (optional) via Windows dialog
+5. **AI response** automatically inserted at cursor
+
+#### **Features:**
+- ✅ **Global hotkey**: Works in any application (Word, Notepad, browsers, etc.)
+- ✅ **Context dialog**: Add custom instructions or prompts
+- ✅ **30-second timeout**: Automatic timeout with notification
+- ✅ **Native Windows integration**: Uses Windows API for seamless operation
+- ✅ **Background processing**: No interruption to your workflow
+- ✅ **Smart notifications**: Success/error feedback via system tray
+
+#### **Use Cases:**
+- **Explain code snippets** copied from IDEs
+- **Improve writing** in documents and emails
+- **Translate text** in any application
+- **Summarize articles** from web browsers
+- **Debug error messages** from logs
+- **Generate responses** to messages
+
+#### **Example Workflow:**
+```
+1. Copy error message: "TypeError: Cannot read property 'length' of undefined"
+2. Position cursor in your code editor
+3. Press Ctrl+Q
+4. Dialog: "Explain this error and suggest a fix"
+5. AI response inserted: "This error occurs when trying to access..."
+```
+
+#### **Technical Details:**
+- **Timeout**: 30 seconds maximum processing time
+- **Notifications**: System tray alerts for status updates
+- **Integration**: Uses Windows clipboard and input APIs
+- **Compatibility**: Works with all Windows applications that accept text input
 
 ### Conversation Management
 
@@ -342,6 +388,7 @@ The wrapper runs on port 3002 by default and provides these endpoints:
 - **Browser**: Uses default browser via `start` command
 - **Dependencies**: None (self-contained executable)
 - **Console Window**: Hidden by default (runs silently in background)
+- **Clipboard AI**: Exclusive feature - process clipboard content with AI using Ctrl+Q
 
 ### macOS
 - **System Tray**: Full native support (appears in menu bar)

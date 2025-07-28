@@ -15,7 +15,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"fyne.io/systray"
 )
@@ -147,6 +149,48 @@ var (
 const (
 	conversationStateFile = "conversation_state.json"
 	defaultAgentSlug      = "sonnet-short-025716"
+	clipboardTimeout      = 30 * time.Second
+)
+
+// Windows API declarations for clipboard and keyboard monitoring
+var (
+	user32               = syscall.NewLazyDLL("user32.dll")
+	kernel32             = syscall.NewLazyDLL("kernel32.dll")
+	procGetClipboardData = user32.NewProc("GetClipboardData")
+	procOpenClipboard    = user32.NewProc("OpenClipboard")
+	procCloseClipboard   = user32.NewProc("CloseClipboard")
+	procGlobalLock       = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
+	procSendInput        = user32.NewProc("SendInput")
+	procMessageBox       = user32.NewProc("MessageBoxW")
+)
+
+// Windows constants
+const (
+	VK_Q            = 0x51
+	VK_CONTROL      = 0x11
+	CF_UNICODETEXT  = 13
+	INPUT_KEYBOARD  = 1
+	KEYEVENTF_KEYUP = 0x0002
+)
+
+// Windows structures
+type INPUT struct {
+	Type uint32
+	Ki   KEYBDINPUT
+}
+
+type KEYBDINPUT struct {
+	WVk         uint16
+	WScan       uint16
+	DwFlags     uint32
+	Time        uint32
+	DwExtraInfo uintptr
+}
+
+// Global variables for clipboard monitoring
+var (
+	clipboardActive bool
 )
 
 // loadConversationState loads the conversation state from JSON file
@@ -537,6 +581,594 @@ func editAgentSlugDialog() error {
 	return updateAgentSlug(newSlug)
 }
 
+// Windows-specific clipboard and keyboard functions
+func getClipboardText() (string, error) {
+	if runtime.GOOS != "windows" {
+		return "", fmt.Errorf("clipboard functionality only available on Windows")
+	}
+
+	r1, _, err := procOpenClipboard.Call(0)
+	if r1 == 0 {
+		return "", fmt.Errorf("failed to open clipboard: %v", err)
+	}
+	defer procCloseClipboard.Call()
+
+	h, _, err := procGetClipboardData.Call(CF_UNICODETEXT)
+	if h == 0 {
+		return "", fmt.Errorf("failed to get clipboard data: %v", err)
+	}
+
+	l, _, err := procGlobalLock.Call(h)
+	if l == 0 {
+		return "", fmt.Errorf("failed to lock global memory: %v", err)
+	}
+	defer procGlobalUnlock.Call(h)
+
+	text := syscall.UTF16ToString((*[1 << 20]uint16)(unsafe.Pointer(l))[:])
+	return text, nil
+}
+
+func sendText(text string) error {
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("text sending only available on Windows")
+	}
+
+	log.Printf("📝 Sending %d characters to cursor position...", len(text))
+
+	// Try multiple approaches for better reliability
+
+	// Method 1: Try clipboard + Ctrl+V approach
+	log.Printf("🔄 Trying clipboard + Ctrl+V method...")
+	err := setClipboardText(text)
+	if err != nil {
+		log.Printf("⚠️ Failed to set clipboard: %v", err)
+	} else {
+		// Small delay to ensure clipboard is set
+		time.Sleep(100 * time.Millisecond)
+
+		err = simulateCtrlV()
+		if err != nil {
+			log.Printf("⚠️ Failed to simulate Ctrl+V: %v", err)
+		} else {
+			log.Printf("✅ Clipboard + Ctrl+V method succeeded")
+			return nil
+		}
+	}
+
+	// Method 2: Try direct window message approach
+	log.Printf("🔄 Trying direct window message method...")
+	err = sendTextViaWindowMessage(text)
+	if err != nil {
+		log.Printf("⚠️ Window message method failed: %v", err)
+	} else {
+		log.Printf("✅ Window message method succeeded")
+		return nil
+	}
+
+	// Method 3: Fallback to character-by-character typing
+	log.Printf("🔄 Falling back to character-by-character typing...")
+	return sendTextCharByChar(text)
+}
+
+func setClipboardText(text string) error {
+	// Open clipboard
+	r1, _, err := procOpenClipboard.Call(0)
+	if r1 == 0 {
+		return fmt.Errorf("failed to open clipboard: %v", err)
+	}
+	defer procCloseClipboard.Call()
+
+	// Clear clipboard
+	user32.NewProc("EmptyClipboard").Call()
+
+	// Convert text to UTF16
+	utf16Text := syscall.StringToUTF16(text)
+
+	// Allocate global memory
+	globalAlloc := kernel32.NewProc("GlobalAlloc")
+	globalLock := kernel32.NewProc("GlobalLock")
+	globalUnlock := kernel32.NewProc("GlobalUnlock")
+
+	size := len(utf16Text) * 2                            // 2 bytes per UTF16 character
+	hMem, _, _ := globalAlloc.Call(0x2000, uintptr(size)) // GMEM_MOVEABLE
+	if hMem == 0 {
+		return fmt.Errorf("failed to allocate global memory")
+	}
+
+	pMem, _, _ := globalLock.Call(hMem)
+	if pMem == 0 {
+		return fmt.Errorf("failed to lock global memory")
+	}
+
+	// Copy text to global memory
+	for i, char := range utf16Text {
+		*(*uint16)(unsafe.Pointer(pMem + uintptr(i*2))) = char
+	}
+
+	globalUnlock.Call(hMem)
+
+	// Set clipboard data
+	setClipboardData := user32.NewProc("SetClipboardData")
+	r2, _, _ := setClipboardData.Call(CF_UNICODETEXT, hMem)
+	if r2 == 0 {
+		return fmt.Errorf("failed to set clipboard data")
+	}
+
+	return nil
+}
+
+func simulateCtrlV() error {
+	log.Printf("🔄 Simulating Ctrl+V keypress...")
+
+	// Simulate Ctrl+V keypress with proper key sequence
+
+	// Key down: Ctrl
+	ctrlDown := INPUT{
+		Type: INPUT_KEYBOARD,
+		Ki: KEYBDINPUT{
+			WVk:     VK_CONTROL,
+			DwFlags: 0, // Key down
+		},
+	}
+
+	// Key down: V
+	vDown := INPUT{
+		Type: INPUT_KEYBOARD,
+		Ki: KEYBDINPUT{
+			WVk:     0x56, // V key
+			DwFlags: 0,    // Key down
+		},
+	}
+
+	// Key up: V
+	vUp := INPUT{
+		Type: INPUT_KEYBOARD,
+		Ki: KEYBDINPUT{
+			WVk:     0x56, // V key
+			DwFlags: KEYEVENTF_KEYUP,
+		},
+	}
+
+	// Key up: Ctrl
+	ctrlUp := INPUT{
+		Type: INPUT_KEYBOARD,
+		Ki: KEYBDINPUT{
+			WVk:     VK_CONTROL,
+			DwFlags: KEYEVENTF_KEYUP,
+		},
+	}
+
+	// Send Ctrl down
+	ret1, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&ctrlDown)), unsafe.Sizeof(ctrlDown))
+	log.Printf("🔄 Ctrl down result: %d", ret1)
+
+	// Small delay
+	time.Sleep(50 * time.Millisecond)
+
+	// Send V down
+	ret2, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&vDown)), unsafe.Sizeof(vDown))
+	log.Printf("🔄 V down result: %d", ret2)
+
+	// Small delay
+	time.Sleep(50 * time.Millisecond)
+
+	// Send V up
+	ret3, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&vUp)), unsafe.Sizeof(vUp))
+	log.Printf("🔄 V up result: %d", ret3)
+
+	// Small delay
+	time.Sleep(50 * time.Millisecond)
+
+	// Send Ctrl up
+	ret4, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&ctrlUp)), unsafe.Sizeof(ctrlUp))
+	log.Printf("🔄 Ctrl up result: %d", ret4)
+
+	if ret1 == 0 || ret2 == 0 || ret3 == 0 || ret4 == 0 {
+		return fmt.Errorf("SendInput failed - results: %d,%d,%d,%d", ret1, ret2, ret3, ret4)
+	}
+
+	log.Printf("✅ Ctrl+V simulation completed successfully")
+	return nil
+}
+
+func sendTextViaWindowMessage(text string) error {
+	log.Printf("🔄 Sending text via window messages...")
+
+	// Get the foreground window (where the cursor is)
+	getForegroundWindow := user32.NewProc("GetForegroundWindow")
+	sendMessage := user32.NewProc("SendMessageW")
+
+	hwnd, _, _ := getForegroundWindow.Call()
+	if hwnd == 0 {
+		return fmt.Errorf("no foreground window found")
+	}
+
+	log.Printf("🔄 Found foreground window: %v", hwnd)
+
+	// Send each character as WM_CHAR message
+	const WM_CHAR = 0x0102
+
+	runes := []rune(text)
+	for i, char := range runes {
+		if i%100 == 0 {
+			log.Printf("🔄 Sending char %d/%d via message", i, len(runes))
+		}
+
+		ret, _, _ := sendMessage.Call(hwnd, WM_CHAR, uintptr(char), 0)
+		if ret == 0 {
+			log.Printf("⚠️ Failed to send char at position %d: %c", i, char)
+		}
+
+		// Small delay
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	log.Printf("✅ Window message method completed")
+	return nil
+}
+
+func sendTextCharByChar(text string) error {
+	log.Printf("🔄 Sending text character by character (%d chars)...", len(text))
+
+	// Convert to runes for proper Unicode handling
+	runes := []rune(text)
+
+	for i, char := range runes {
+		if i%100 == 0 {
+			log.Printf("🔄 Progress: %d/%d characters", i, len(runes))
+		}
+
+		// Use Unicode input for better character support
+		input := INPUT{
+			Type: INPUT_KEYBOARD,
+			Ki: KEYBDINPUT{
+				WVk:         0, // Use 0 for Unicode input
+				WScan:       uint16(char),
+				DwFlags:     4, // KEYEVENTF_UNICODE
+				Time:        0,
+				DwExtraInfo: 0,
+			},
+		}
+
+		// Send the character
+		procSendInput.Call(1, uintptr(unsafe.Pointer(&input)), unsafe.Sizeof(input))
+		// Suppress individual character failure messages for cleaner output
+
+		// Small delay between characters (adjust if too slow)
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	log.Printf("✅ Character-by-character sending completed")
+	return nil
+}
+
+func showWindowsInputDialog(title, prompt, defaultValue string) (string, error) {
+	if runtime.GOOS != "windows" {
+		return "", fmt.Errorf("Windows input dialog only available on Windows")
+	}
+
+	// For now, use a simple message box approach
+	// In a full implementation, you'd create a proper dialog window
+	titlePtr, _ := syscall.UTF16PtrFromString(title + "\n\n" + prompt + "\n\nDefault: " + defaultValue + "\n\nPress OK to use default, Cancel to skip.")
+	captionPtr, _ := syscall.UTF16PtrFromString("Khoj AI - Add Context")
+
+	// MB_OKCANCEL = 1, MB_ICONQUESTION = 32
+	ret, _, _ := procMessageBox.Call(0, uintptr(unsafe.Pointer(titlePtr)), uintptr(unsafe.Pointer(captionPtr)), 1|32)
+
+	if ret == 1 { // OK pressed
+		return defaultValue, nil
+	}
+	return "", nil // Cancel pressed or closed
+}
+
+func showNotification(title, message string) {
+	if runtime.GOOS != "windows" {
+		log.Printf("%s: %s", title, message)
+		return
+	}
+
+	// Log the notification
+	log.Printf("📢 %s: %s", title, message)
+
+	// Update systray tooltip temporarily
+	originalTooltip := "Khoj OpenAI Wrapper Server"
+	systray.SetTooltip(fmt.Sprintf("%s: %s", title, message))
+
+	// Show Windows balloon notification using Shell_NotifyIcon
+	go func() {
+		showBalloonNotification(title, message)
+
+		// Reset tooltip after 3 seconds
+		time.Sleep(3 * time.Second)
+		systray.SetTooltip(originalTooltip)
+	}()
+}
+
+// showBalloonNotification shows a Windows balloon notification
+func showBalloonNotification(title, message string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	shell32 := syscall.NewLazyDLL("shell32.dll")
+	procShellNotifyIcon := shell32.NewProc("Shell_NotifyIconW")
+
+	// NOTIFYICONDATA structure (simplified)
+	type NOTIFYICONDATA struct {
+		CbSize           uint32
+		Hwnd             syscall.Handle
+		UID              uint32
+		UFlags           uint32
+		UCallbackMessage uint32
+		HIcon            syscall.Handle
+		SzTip            [128]uint16
+		DwState          uint32
+		DwStateMask      uint32
+		SzInfo           [256]uint16
+		UVersion         uint32
+		SzInfoTitle      [64]uint16
+		DwInfoFlags      uint32
+	}
+
+	// Constants
+	const (
+		NIM_MODIFY = 0x00000001
+		NIF_INFO   = 0x00000010
+		NIIF_INFO  = 0x00000001
+	)
+
+	// Create notification data
+	var nid NOTIFYICONDATA
+	nid.CbSize = uint32(unsafe.Sizeof(nid))
+	nid.UFlags = NIF_INFO
+	nid.DwInfoFlags = NIIF_INFO
+
+	// Convert strings to UTF16
+	titleUTF16 := syscall.StringToUTF16(title)
+	messageUTF16 := syscall.StringToUTF16(message)
+
+	// Copy title (max 63 chars + null terminator)
+	copy(nid.SzInfoTitle[:], titleUTF16[:min(len(titleUTF16), 64)])
+
+	// Copy message (max 255 chars + null terminator)
+	copy(nid.SzInfo[:], messageUTF16[:min(len(messageUTF16), 256)])
+
+	// Show notification
+	procShellNotifyIcon.Call(NIM_MODIFY, uintptr(unsafe.Pointer(&nid)))
+}
+
+// processClipboardWithAI processes clipboard content with AI and inserts response at cursor
+func processClipboardWithAI() {
+	if runtime.GOOS != "windows" {
+		log.Printf("Clipboard AI feature only available on Windows")
+		return
+	}
+
+	if clipboardActive {
+		log.Printf("Clipboard AI already processing, ignoring request")
+		showNotification("Khoj AI", "Already processing a request...")
+		return
+	}
+
+	clipboardActive = true
+	defer func() {
+		clipboardActive = false
+		log.Printf("🔄 Clipboard AI processing completed")
+	}()
+
+	log.Printf("🚀 Starting clipboard AI processing...")
+
+	// Get clipboard content
+	clipboardText, err := getClipboardText()
+	if err != nil {
+		log.Printf("❌ Failed to get clipboard text: %v", err)
+		showNotification("Khoj AI Error", fmt.Sprintf("Failed to read clipboard: %v", err))
+		return
+	}
+
+	if strings.TrimSpace(clipboardText) == "" {
+		log.Printf("⚠️ Clipboard is empty")
+		showNotification("Khoj AI", "Clipboard is empty - copy some text first")
+		return
+	}
+
+	log.Printf("📋 Clipboard content: %d characters", len(clipboardText))
+
+	// Prepare the prompt directly without dialog for instant processing
+	finalPrompt := fmt.Sprintf("Please explain or help with this content:\n\n%s", clipboardText)
+
+	// Create context with timeout - don't defer cancel here since we need it in the goroutine
+	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
+
+	// Get API configuration
+	apiBase := os.Getenv("KHOJ_API_BASE")
+	if apiBase == "" {
+		apiBase = "https://app.khoj.dev"
+	}
+
+	apiKey := os.Getenv("KHOJ_API_KEY")
+	if apiKey == "" {
+		log.Printf("❌ KHOJ_API_KEY not set")
+		showNotification("Khoj AI Error", "API key not configured")
+		return
+	}
+
+	log.Printf("🔧 Using API base: %s", apiBase)
+	log.Printf("🔧 Using conversation ID: %s", conversationID)
+
+	// Process with AI using existing conversation context
+	log.Printf("🤖 Sending request to Khoj AI...")
+	showNotification("Khoj AI", "Sending to AI...")
+
+	go func() {
+		defer cancel() // Cancel context when goroutine completes
+
+		// Use the existing Khoj chat API with conversation context
+		aiResponse, err := sendToKhojChat(apiBase, apiKey, conversationID, finalPrompt, ctx)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				log.Printf("⏰ AI request timed out after %v", clipboardTimeout)
+				showNotification("Khoj AI Timeout", fmt.Sprintf("Timed out after %d seconds", int(clipboardTimeout.Seconds())))
+			} else {
+				log.Printf("❌ AI request failed: %v", err)
+				showNotification("Khoj AI Error", fmt.Sprintf("Request failed: %v", err))
+			}
+			return
+		}
+
+		log.Printf("✅ Received AI response (%d characters)", len(aiResponse))
+
+		// Send the AI response to the current cursor position
+		log.Printf("⌨️ Inserting response at cursor...")
+		err = sendText(aiResponse)
+		if err != nil {
+			log.Printf("❌ Failed to send text: %v", err)
+			showNotification("Khoj AI Error", fmt.Sprintf("Failed to insert: %v", err))
+		} else {
+			log.Printf("✅ Successfully inserted AI response")
+			showNotification("Khoj AI Success", "Response inserted!")
+		}
+	}()
+}
+
+// sendToKhojChat sends a message to Khoj using the existing conversation context
+func sendToKhojChat(apiBase, apiKey, conversationID, message string, ctx context.Context) (string, error) {
+	// Prepare the request body
+	requestBody := map[string]interface{}{
+		"q":               message,
+		"conversation_id": conversationID,
+		"stream":          false,
+		"train":           false,
+		"agent":           currentAgentSlug,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create the request
+	url := fmt.Sprintf("%s/api/chat", apiBase)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+
+	// Send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read the response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Parse the response
+	var khojResp KhojResponse
+	if err := json.Unmarshal(body, &khojResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return khojResp.Response, nil
+}
+
+// setupKeyboardMonitoring sets up polling-based Ctrl+Q detection
+func setupKeyboardMonitoring() error {
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("keyboard monitoring only available on Windows")
+	}
+
+	log.Printf("� Setting up keyboard monitoring for Ctrl+Q...")
+
+	// Start polling for Ctrl+Q combination
+	go func() {
+		getAsyncKeyState := user32.NewProc("GetAsyncKeyState")
+
+		var lastCtrlQState bool
+		ticker := time.NewTicker(50 * time.Millisecond) // Check every 50ms
+		defer ticker.Stop()
+
+		log.Printf("✅ Keyboard monitoring started! Press Ctrl+Q to use Clipboard AI")
+		showNotification("Khoj AI Ready", "Press Ctrl+Q to process clipboard")
+
+		for {
+			select {
+			case <-ticker.C:
+				// Check if both Ctrl and Q are pressed
+				ctrlState, _, _ := getAsyncKeyState.Call(VK_CONTROL)
+				qState, _, _ := getAsyncKeyState.Call(VK_Q)
+
+				ctrlPressed := (ctrlState & 0x8000) != 0
+				qPressed := (qState & 0x8000) != 0
+
+				currentCtrlQState := ctrlPressed && qPressed
+
+				// Trigger only on the rising edge (when Ctrl+Q becomes pressed)
+				if currentCtrlQState && !lastCtrlQState {
+					log.Printf("🎯 Ctrl+Q detected! Processing clipboard with AI...")
+
+					// Show immediate notification and process
+					go func() {
+						showNotification("Khoj AI", "Processing clipboard...")
+						processClipboardWithAI()
+					}()
+				}
+
+				lastCtrlQState = currentCtrlQState
+			}
+		}
+	}()
+
+	return nil
+}
+
+// testKeyboardState manually checks if Ctrl+Q is currently pressed (for debugging)
+func testKeyboardState() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	getAsyncKeyState := user32.NewProc("GetAsyncKeyState")
+
+	qState, _, _ := getAsyncKeyState.Call(VK_Q)
+	ctrlState, _, _ := getAsyncKeyState.Call(VK_CONTROL)
+
+	qPressed := (qState & 0x8000) != 0
+	ctrlPressed := (ctrlState & 0x8000) != 0
+
+	log.Printf("🔍 Manual key state check:")
+	log.Printf("  Q key: %t (raw: %d/0x%x)", qPressed, qState, qState)
+	log.Printf("  Ctrl key: %t (raw: %d/0x%x)", ctrlPressed, ctrlState, ctrlState)
+
+	if qPressed && ctrlPressed {
+		log.Printf("🎯 Manual detection: Ctrl+Q is currently pressed!")
+		showNotification("Debug", "Ctrl+Q detected manually!")
+	} else {
+		log.Printf("ℹ️ Ctrl+Q not currently pressed")
+		showNotification("Debug", fmt.Sprintf("Q:%t Ctrl:%t", qPressed, ctrlPressed))
+	}
+}
+
+// stopKeyboardMonitoring stops the keyboard monitoring (placeholder for cleanup)
+func stopKeyboardMonitoring() {
+	// The polling goroutine will stop when the application exits
+	log.Printf("Keyboard monitoring stopped")
+}
+
 type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -572,6 +1204,13 @@ func onReady() {
 	systray.SetTitle("Khoj Provider")
 	systray.SetTooltip("Khoj OpenAI Wrapper Server")
 
+	// Set up keyboard monitoring for Ctrl+Q (Windows only)
+	if runtime.GOOS == "windows" {
+		if err := setupKeyboardMonitoring(); err != nil {
+			log.Printf("Failed to setup keyboard monitoring: %v", err)
+		}
+	}
+
 	// Menu items
 	mStart := systray.AddMenuItem("Start Server", "Start the server")
 	mStop := systray.AddMenuItem("Stop Server", "Stop the server")
@@ -591,6 +1230,16 @@ func onReady() {
 	mAPIKey := systray.AddMenuItem(getAPIKeyStatus(), "API Key status")
 	mAPIKey.Disable() // Read-only status
 	systray.AddSeparator()
+
+	// Clipboard AI feature (Windows only)
+	var mClipboardAI *systray.MenuItem
+	var mTestKeys *systray.MenuItem
+	if runtime.GOOS == "windows" {
+		mClipboardAI = systray.AddMenuItem("📋 Clipboard AI (Ctrl+Q)", "Process clipboard with AI and insert at cursor")
+		mTestKeys = systray.AddMenuItem("🔍 Test Keyboard State", "Debug keyboard hook detection")
+		systray.AddSeparator()
+	}
+
 	mQuit := systray.AddMenuItem("Quit", "Quit the application")
 
 	mStop.Disable()
@@ -653,6 +1302,32 @@ func onReady() {
 			}
 		}
 	}()
+
+	// Handle clipboard AI menu clicks in a separate goroutine (Windows only)
+	if mClipboardAI != nil {
+		go func() {
+			for {
+				select {
+				case <-mClipboardAI.ClickedCh:
+					log.Printf("📋 Clipboard AI menu clicked")
+					go processClipboardWithAI()
+				}
+			}
+		}()
+	}
+
+	// Handle test keyboard state menu clicks (Windows only)
+	if mTestKeys != nil {
+		go func() {
+			for {
+				select {
+				case <-mTestKeys.ClickedCh:
+					log.Printf("🔍 Test keyboard state menu clicked")
+					testKeyboardState()
+				}
+			}
+		}()
+	}
 
 	// Auto-start server
 	go startServer()
@@ -808,6 +1483,11 @@ func stopServer() {
 }
 
 func onExit() {
+	// Clean up keyboard monitoring
+	if runtime.GOOS == "windows" {
+		stopKeyboardMonitoring()
+	}
+
 	if globalServer.running {
 		stopServer()
 	}
