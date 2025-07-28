@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"fyne.io/systray"
-	"gopkg.in/toast.v1"
 )
 
 // OpenAI API structures
@@ -1064,28 +1063,47 @@ func showNotification(title, message string) {
 	}()
 }
 
-// showToastNotification tries to show notification using toast library (works in console mode)
+// showToastNotification tries to show notification using PowerShell (cross-platform compatible)
 func showToastNotification(title, message string) bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("⚠️ Toast notification panicked: %v", r)
+	// Use PowerShell with Windows.UI.Notifications for proper toast
+	script := fmt.Sprintf(`
+		try {
+			[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+			[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+			[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+
+			$APP_ID = 'Microsoft.Windows.Computer'
+			$template = @"
+<toast>
+    <visual>
+        <binding template="ToastGeneric">
+            <text>%s</text>
+            <text>%s</text>
+        </binding>
+    </visual>
+    <audio src="ms-winsoundevent:Notification.Default" />
+</toast>
+"@
+
+			$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+			$xml.LoadXml($template)
+			$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+			[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($APP_ID).Show($toast)
+			exit 0
+		} catch {
+			exit 1
 		}
-	}()
+	`, title, message)
 
-	notification := toast.Notification{
-		AppID:   "Microsoft.Windows.Computer",
-		Title:   title,
-		Message: message,
-		Audio:   toast.Default,
-	}
-
-	err := notification.Push()
+	// Execute PowerShell script silently
+	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
+	err := cmd.Run()
 	if err != nil {
-		log.Printf("⚠️ Toast notification error: %v", err)
+		log.Printf("⚠️ PowerShell toast notification failed: %v", err)
 		return false
 	}
 
