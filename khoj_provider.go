@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"fyne.io/systray"
+	"gopkg.in/toast.v1"
 )
 
 // OpenAI API structures
@@ -794,10 +795,8 @@ func sendTextViaWindowMessage(text string) error {
 			log.Printf("🔄 Sending char %d/%d via message", i, len(runes))
 		}
 
-		ret, _, _ := sendMessage.Call(hwnd, WM_CHAR, uintptr(char), 0)
-		if ret == 0 {
-			log.Printf("⚠️ Failed to send char at position %d: %c", i, char)
-		}
+		sendMessage.Call(hwnd, WM_CHAR, uintptr(char), 0)
+		// Suppress individual character failure messages for cleaner output
 
 		// Small delay
 		time.Sleep(1 * time.Millisecond)
@@ -867,74 +866,141 @@ func showNotification(title, message string) {
 		return
 	}
 
-	// Log the notification
+	// Log the notification (works in both console and windowsgui mode)
 	log.Printf("📢 %s: %s", title, message)
 
-	// Update systray tooltip temporarily
-	originalTooltip := "Khoj OpenAI Wrapper Server"
-	systray.SetTooltip(fmt.Sprintf("%s: %s", title, message))
+	// Update systray tooltip with notification
+	notificationText := fmt.Sprintf("🔔 %s: %s", title, message)
+	systray.SetTooltip(notificationText)
 
-	// Show Windows balloon notification using Shell_NotifyIcon
+	// Show Windows notification - different approach for windowsgui vs console mode
 	go func() {
-		showBalloonNotification(title, message)
+		log.Printf("🔔 Attempting to show notification: %s - %s", title, message)
 
-		// Reset tooltip after 3 seconds
-		time.Sleep(3 * time.Second)
-		systray.SetTooltip(originalTooltip)
+		// Try toast library first (works in console mode)
+		if showToastNotification(title, message) {
+			log.Printf("✅ Toast notification shown successfully")
+		} else {
+			log.Printf("⚠️ Toast notification failed, trying PowerShell method...")
+			// Fallback to PowerShell method for windowsgui mode
+			showPowerShellNotification(title, message)
+		}
+
+		// Keep the tooltip notification visible for 5 seconds
+		time.Sleep(5 * time.Second)
+		systray.SetTooltip("Khoj OpenAI Wrapper Server")
 	}()
 }
 
-// showBalloonNotification shows a Windows balloon notification
-func showBalloonNotification(title, message string) {
+// showToastNotification tries to show notification using toast library (works in console mode)
+func showToastNotification(title, message string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️ Toast notification panicked: %v", r)
+		}
+	}()
+
+	notification := toast.Notification{
+		AppID:   "Microsoft.Windows.Computer",
+		Title:   title,
+		Message: message,
+		Audio:   toast.Default,
+	}
+
+	err := notification.Push()
+	if err != nil {
+		log.Printf("⚠️ Toast notification error: %v", err)
+		return false
+	}
+
+	return true
+}
+
+// showPowerShellNotification shows notification using PowerShell (works in windowsgui mode)
+func showPowerShellNotification(title, message string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
 
-	shell32 := syscall.NewLazyDLL("shell32.dll")
-	procShellNotifyIcon := shell32.NewProc("Shell_NotifyIconW")
+	// Use PowerShell with Windows.UI.Notifications for proper toast in windowsgui mode
+	script := fmt.Sprintf(`
+		[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+		[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+		[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
-	// NOTIFYICONDATA structure (simplified)
-	type NOTIFYICONDATA struct {
-		CbSize           uint32
-		Hwnd             syscall.Handle
-		UID              uint32
-		UFlags           uint32
-		UCallbackMessage uint32
-		HIcon            syscall.Handle
-		SzTip            [128]uint16
-		DwState          uint32
-		DwStateMask      uint32
-		SzInfo           [256]uint16
-		UVersion         uint32
-		SzInfoTitle      [64]uint16
-		DwInfoFlags      uint32
+		$APP_ID = 'Microsoft.Windows.Computer'
+		$template = @"
+<toast>
+    <visual>
+        <binding template="ToastGeneric">
+            <text>%s</text>
+            <text>%s</text>
+        </binding>
+    </visual>
+    <audio src="ms-winsoundevent:Notification.Default" />
+</toast>
+"@
+
+		$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+		$xml.LoadXml($template)
+		$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+		[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($APP_ID).Show($toast)
+	`, title, message)
+
+	// Execute PowerShell script
+	go func() {
+		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
+		err := cmd.Run()
+		if err != nil {
+			log.Printf("⚠️ PowerShell notification failed: %v", err)
+			// Final fallback to simple message box
+			showFallbackNotification(title, message)
+		} else {
+			log.Printf("✅ PowerShell notification sent successfully")
+		}
+	}()
+}
+
+// showFallbackNotification shows a simple fallback notification
+func showFallbackNotification(title, message string) {
+	if runtime.GOOS != "windows" {
+		return
 	}
 
-	// Constants
-	const (
-		NIM_MODIFY = 0x00000001
-		NIF_INFO   = 0x00000010
-		NIIF_INFO  = 0x00000001
-	)
+	// Simple MessageBox as absolute fallback
+	go func() {
+		titlePtr, _ := syscall.UTF16PtrFromString(title)
+		messagePtr, _ := syscall.UTF16PtrFromString(message)
 
-	// Create notification data
-	var nid NOTIFYICONDATA
-	nid.CbSize = uint32(unsafe.Sizeof(nid))
-	nid.UFlags = NIF_INFO
-	nid.DwInfoFlags = NIIF_INFO
+		// MB_OK = 0, MB_ICONINFORMATION = 64, MB_TOPMOST = 0x40000
+		procMessageBox.Call(0, uintptr(unsafe.Pointer(messagePtr)), uintptr(unsafe.Pointer(titlePtr)), 0|64|0x40000)
+	}()
+}
 
-	// Convert strings to UTF16
-	titleUTF16 := syscall.StringToUTF16(title)
-	messageUTF16 := syscall.StringToUTF16(message)
+// checkNotificationSettings checks Windows notification settings
+func checkNotificationSettings() {
+	if runtime.GOOS != "windows" {
+		return
+	}
 
-	// Copy title (max 63 chars + null terminator)
-	copy(nid.SzInfoTitle[:], titleUTF16[:min(len(titleUTF16), 64)])
+	log.Printf("🔍 Checking Windows notification settings...")
 
-	// Copy message (max 255 chars + null terminator)
-	copy(nid.SzInfo[:], messageUTF16[:min(len(messageUTF16), 256)])
+	// Check if notifications are enabled globally
+	// This is a simplified check - in reality, there are many registry keys to check
+	log.Printf("ℹ️ Common reasons toast notifications might not appear:")
+	log.Printf("   1. Focus Assist is enabled (Priority only or Alarms only)")
+	log.Printf("   2. Notifications are disabled in Windows Settings")
+	log.Printf("   3. App notifications are disabled for this application")
+	log.Printf("   4. Do Not Disturb mode is enabled")
+	log.Printf("   5. Presentation mode is active")
+	log.Printf("   6. Windows notification service is not running")
 
-	// Show notification
-	procShellNotifyIcon.Call(NIM_MODIFY, uintptr(unsafe.Pointer(&nid)))
+	log.Printf("💡 To check: Windows Settings > System > Notifications & actions")
+	log.Printf("💡 To check Focus Assist: Windows key + U, then F")
 }
 
 // processClipboardWithAI processes clipboard content with AI and inserts response at cursor
@@ -974,6 +1040,9 @@ func processClipboardWithAI() {
 
 	log.Printf("📋 Clipboard content: %d characters", len(clipboardText))
 
+	// Show single notification at the start
+	showNotification("Khoj AI", "Processing clipboard content...")
+
 	// Prepare the prompt directly without dialog for instant processing
 	finalPrompt := fmt.Sprintf("Please explain or help with this content:\n\n%s", clipboardText)
 
@@ -998,7 +1067,6 @@ func processClipboardWithAI() {
 
 	// Process with AI using existing conversation context
 	log.Printf("🤖 Sending request to Khoj AI...")
-	showNotification("Khoj AI", "Sending to AI...")
 
 	go func() {
 		defer cancel() // Cancel context when goroutine completes
@@ -1008,9 +1076,11 @@ func processClipboardWithAI() {
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				log.Printf("⏰ AI request timed out after %v", clipboardTimeout)
+				// Only show notification for timeout errors
 				showNotification("Khoj AI Timeout", fmt.Sprintf("Timed out after %d seconds", int(clipboardTimeout.Seconds())))
 			} else {
 				log.Printf("❌ AI request failed: %v", err)
+				// Only show notification for critical errors
 				showNotification("Khoj AI Error", fmt.Sprintf("Request failed: %v", err))
 			}
 			return
@@ -1023,10 +1093,11 @@ func processClipboardWithAI() {
 		err = sendText(aiResponse)
 		if err != nil {
 			log.Printf("❌ Failed to send text: %v", err)
+			// Only show notification for insertion errors
 			showNotification("Khoj AI Error", fmt.Sprintf("Failed to insert: %v", err))
 		} else {
 			log.Printf("✅ Successfully inserted AI response")
-			showNotification("Khoj AI Success", "Response inserted!")
+			// No success notification - user can see the text was inserted
 		}
 	}()
 }
@@ -1209,6 +1280,9 @@ func onReady() {
 		if err := setupKeyboardMonitoring(); err != nil {
 			log.Printf("Failed to setup keyboard monitoring: %v", err)
 		}
+
+		// Check notification settings on startup
+		checkNotificationSettings()
 	}
 
 	// Menu items
@@ -1234,9 +1308,11 @@ func onReady() {
 	// Clipboard AI feature (Windows only)
 	var mClipboardAI *systray.MenuItem
 	var mTestKeys *systray.MenuItem
+	var mTestNotification *systray.MenuItem
 	if runtime.GOOS == "windows" {
 		mClipboardAI = systray.AddMenuItem("📋 Clipboard AI (Ctrl+Q)", "Process clipboard with AI and insert at cursor")
 		mTestKeys = systray.AddMenuItem("🔍 Test Keyboard State", "Debug keyboard hook detection")
+		mTestNotification = systray.AddMenuItem("🔔 Test Notification", "Test Windows toast notification")
 		systray.AddSeparator()
 	}
 
@@ -1324,6 +1400,20 @@ func onReady() {
 				case <-mTestKeys.ClickedCh:
 					log.Printf("🔍 Test keyboard state menu clicked")
 					testKeyboardState()
+				}
+			}
+		}()
+	}
+
+	// Handle test notification menu clicks (Windows only)
+	if mTestNotification != nil {
+		go func() {
+			for {
+				select {
+				case <-mTestNotification.ClickedCh:
+					log.Printf("🔔 Test notification menu clicked")
+					checkNotificationSettings()
+					showNotification("Test Notification", "This is a test notification to verify Windows toast notifications are working.")
 				}
 			}
 		}()
