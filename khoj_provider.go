@@ -154,16 +154,53 @@ const (
 
 // Windows API declarations for clipboard and keyboard monitoring
 var (
-	user32               = syscall.NewLazyDLL("user32.dll")
-	kernel32             = syscall.NewLazyDLL("kernel32.dll")
-	procGetClipboardData = user32.NewProc("GetClipboardData")
-	procOpenClipboard    = user32.NewProc("OpenClipboard")
-	procCloseClipboard   = user32.NewProc("CloseClipboard")
-	procGlobalLock       = kernel32.NewProc("GlobalLock")
-	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
-	procSendInput        = user32.NewProc("SendInput")
-	procMessageBox       = user32.NewProc("MessageBoxW")
+	user32               *syscall.LazyDLL
+	kernel32             *syscall.LazyDLL
+	procGetClipboardData *syscall.LazyProc
+	procOpenClipboard    *syscall.LazyProc
+	procCloseClipboard   *syscall.LazyProc
+	procGlobalLock       *syscall.LazyProc
+	procGlobalUnlock     *syscall.LazyProc
+	procSendInput        *syscall.LazyProc
+	procMessageBox       *syscall.LazyProc
 )
+
+func init() {
+	if runtime.GOOS == "windows" {
+		user32 = syscall.NewLazyDLL("user32.dll")
+		kernel32 = syscall.NewLazyDLL("kernel32.dll")
+		procGetClipboardData = user32.NewProc("GetClipboardData")
+		procOpenClipboard = user32.NewProc("OpenClipboard")
+		procCloseClipboard = user32.NewProc("CloseClipboard")
+		procGlobalLock = kernel32.NewProc("GlobalLock")
+		procGlobalUnlock = kernel32.NewProc("GlobalUnlock")
+		procSendInput = user32.NewProc("SendInput")
+		procMessageBox = user32.NewProc("MessageBoxW")
+	}
+}
+
+// Cross-platform safe syscall wrappers
+func safeUTF16PtrFromString(s string) (uintptr, error) {
+	if runtime.GOOS != "windows" {
+		return 0, fmt.Errorf("Windows-only function")
+	}
+	ptr, err := syscall.UTF16PtrFromString(s)
+	return uintptr(unsafe.Pointer(ptr)), err
+}
+
+func safeUTF16ToString(p uintptr, maxLen int) string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	return syscall.UTF16ToString((*[1 << 20]uint16)(unsafe.Pointer(p))[:maxLen])
+}
+
+func safeStringToUTF16(s string) []uint16 {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	return syscall.StringToUTF16(s)
+}
 
 // Windows constants
 const (
@@ -604,7 +641,7 @@ func getClipboardText() (string, error) {
 	}
 	defer procGlobalUnlock.Call(h)
 
-	text := syscall.UTF16ToString((*[1 << 20]uint16)(unsafe.Pointer(l))[:])
+	text := safeUTF16ToString(l, 1<<20)
 	return text, nil
 }
 
@@ -662,7 +699,7 @@ func setClipboardText(text string) error {
 	user32.NewProc("EmptyClipboard").Call()
 
 	// Convert text to UTF16
-	utf16Text := syscall.StringToUTF16(text)
+	utf16Text := safeStringToUTF16(text)
 
 	// Allocate global memory
 	globalAlloc := kernel32.NewProc("GlobalAlloc")
@@ -896,8 +933,8 @@ func forceWindowToForeground() {
 	setWindowPos := user32.NewProc("SetWindowPos")
 
 	// Try to find MessageBox window (class name "#32770")
-	className, _ := syscall.UTF16PtrFromString("#32770")
-	hwnd, _, _ := findWindow.Call(uintptr(unsafe.Pointer(className)), 0)
+	className, _ := safeUTF16PtrFromString("#32770")
+	hwnd, _, _ := findWindow.Call(className, 0)
 
 	if hwnd != 0 {
 		// Multiple attempts to bring window to front
@@ -929,8 +966,8 @@ func showModernInputDialog(title, prompt, defaultValue string) (string, bool) {
 	desktopWindow, _, _ := getDesktopWindow.Call()
 
 	// First, show a choice dialog
-	titlePtr, _ := syscall.UTF16PtrFromString(title)
-	promptPtr, _ := syscall.UTF16PtrFromString(fmt.Sprintf("%s\n\nDefault: \"%s\"\n\nYES = Use default prompt\nNO = Enter custom prompt\nCANCEL = Abort", prompt, defaultValue))
+	titlePtr, _ := safeUTF16PtrFromString(title)
+	promptPtr, _ := safeUTF16PtrFromString(fmt.Sprintf("%s\n\nDefault: \"%s\"\n\nYES = Use default prompt\nNO = Enter custom prompt\nCANCEL = Abort", prompt, defaultValue))
 
 	// Start a goroutine to force the dialog to foreground after a short delay
 	go func() {
@@ -939,7 +976,7 @@ func showModernInputDialog(title, prompt, defaultValue string) (string, bool) {
 	}()
 
 	// MB_YESNOCANCEL = 3, MB_ICONQUESTION = 32, MB_TOPMOST = 0x40000, MB_SETFOREGROUND = 0x10000, MB_SYSTEMMODAL = 0x1000
-	ret, _, _ := procMessageBox.Call(desktopWindow, uintptr(unsafe.Pointer(promptPtr)), uintptr(unsafe.Pointer(titlePtr)), 3|32|0x40000|0x10000|0x1000)
+	ret, _, _ := procMessageBox.Call(desktopWindow, promptPtr, titlePtr, 3|32|0x40000|0x10000|0x1000)
 
 	switch ret {
 	case 6: // YES - use default
@@ -1163,11 +1200,11 @@ func showFallbackNotification(title, message string) {
 
 	// Simple MessageBox as absolute fallback
 	go func() {
-		titlePtr, _ := syscall.UTF16PtrFromString(title)
-		messagePtr, _ := syscall.UTF16PtrFromString(message)
+		titlePtr, _ := safeUTF16PtrFromString(title)
+		messagePtr, _ := safeUTF16PtrFromString(message)
 
 		// MB_OK = 0, MB_ICONINFORMATION = 64, MB_TOPMOST = 0x40000
-		procMessageBox.Call(0, uintptr(unsafe.Pointer(messagePtr)), uintptr(unsafe.Pointer(titlePtr)), 0|64|0x40000)
+		procMessageBox.Call(0, messagePtr, titlePtr, 0|64|0x40000)
 	}()
 }
 
